@@ -77,14 +77,20 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
         if not os.path.exists(dirs):
             os.makedirs(dirs)
 
+
+    def make_puppet_certs_dir(self, certs_dir = '/var/lib/puppet/ssl/certs', private_keys_dir = '/var/lib/puppet/ssl/private_keys'):
+        self._makedirs(self._mountpoint + certs_dir)
+        self._makedirs(self._mountpoint + private_keys_dir)
+
     def copy_puppet_certs(self, pem_file_name, certs_dir = '/var/lib/puppet/ssl/certs', private_keys_dir = '/var/lib/puppet/ssl/private_keys'):
 	# TODO make this configurable     
 	log.debug('Placing certs for {0} into mountpoint {1}'.format(pem_file_name, self._mountpoint))
-        self._makedirs(self._mountpoint + certs_dir)
-        self._makedirs(self._mountpoint + private_keys_dir)
 	shutil.copy(certs_dir        + '/ca.pem',           self._mountpoint + certs_dir)
 	shutil.copy(certs_dir        + '/' + pem_file_name + '.pem', self._mountpoint + certs_dir)
 	shutil.copy(private_keys_dir + '/' + pem_file_name + '.pem', self._mountpoint + private_keys_dir)
+
+    def rm_puppet_certs_dirs(self, certs_dir = '/var/lib/puppet/ssl'):
+        shutil.rmtree(certs_dir)
 
     def provision(self):
         """
@@ -104,8 +110,8 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
 	# generate the certificate or check that the specified file exists
 	generate_certificate(context.package.arg)
 
+        self.make_puppet_certs_dir()
 	self.copy_puppet_certs(context.package.arg)
-
 
         with Chroot(self._mountpoint):
             log.debug('Inside chroot')
@@ -114,8 +120,10 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
             log.info('Installing puppet agent')
             apt_get_install("puppet")
             
-            log.info('Running pupet agent')
+            log.info('Running puppet agent')
             result = puppet(context.package.arg, context.puppet.get('puppet_master_hostname', socket.gethostname()))
+            self.rm_puppet_certs_dirs()
+            self.make_puppet_certs_dir()
 
             if not result.success:
                 log.critical('puppet agent run failed: {0.std_err}'.format(result.result))
