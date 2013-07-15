@@ -123,14 +123,19 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
             log.info('Running puppet agent')
             result = puppet(context.package.arg, context.puppet.get('puppet_master_hostname', socket.gethostname()))
             self.rm_puppet_certs_dirs()
-            self.make_puppet_certs_dir()
 
-            if not result.success:
+            # * --detailed-exitcodes:
+            #   Provide transaction information via exit codes. If this is enabled, an exit
+            #   code of '2' means there were changes, an exit code of '4' means there were
+            #   failures during the transaction, and an exit code of '6' means there were both
+            #   changes and failures.
+            if result.result.status_code in [4,6]:
                 log.critical('puppet agent run failed: {0.std_err}'.format(result.result))
                 return False
 
             self._store_package_metadata()
 
+        self.make_puppet_certs_dir()
         log.debug('Exited chroot')
 
         log.info('Provisioning succeeded!')
@@ -140,7 +145,7 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
 
 @command()
 def puppet(certname, puppet_master_hostname):
-    return 'puppet agent --color=false --no-daemonize --logdest console --onetime --certname {0} --server {1}'.format(certname, puppet_master_hostname)
+    return 'puppet agent --detailed-exitcodes --color=false --no-daemonize --logdest console --onetime --certname {0} --server {1}'.format(certname, puppet_master_hostname)
 
 @command()
 def generate_certificate(certname):
