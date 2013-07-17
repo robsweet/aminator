@@ -127,10 +127,12 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
             #   code of '2' means there were changes, an exit code of '4' means there were
             #   failures during the transaction, and an exit code of '6' means there were both
             #   changes and failures.
-            if result.result.status_code in [4,6]:
+            log.info('puppet status code {0} with result {1}'.format(result.result.status_code, result.result))
+            if not (result.result.status_code in [0,2]):
                 log.critical('puppet agent run failed: {0.std_err}'.format(result.result))
                 return False
 
+            
             self._store_package_metadata()
 
         self.make_puppet_certs_dir()
