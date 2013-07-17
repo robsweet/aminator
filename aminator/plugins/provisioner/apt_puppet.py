@@ -54,9 +54,7 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
         context = self._config.context
         puppet_config = self._parser.add_argument_group(title='Puppet Options',
                                                       description='Options for the puppet provisioner')
-        puppet_config.add_argument('-H', '--puppet-agent-certname', dest='puppet_agent_certname',
-                                    action=conf_action(config=context.puppet),
-                                    help='A certname for the chrooted environment that indicates to puppet what catalog to apply')
+
         puppet_config.add_argument('-P', '--puppet-master-hostname', dest='puppet_master_hostname',
                                     action=conf_action(config=context.puppet),
                                     help='The puppet master hostname')
