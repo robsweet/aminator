@@ -19,7 +19,7 @@
 #
 
 """
-aminator.plugins.provisioner.apt_puppet
+aminator.plugins.provisioner.puppet
 ================================
 """
 import os
@@ -31,24 +31,25 @@ from collections import namedtuple
 import json
 
 from aminator.plugins.provisioner.apt import AptProvisionerPlugin, dpkg_install
+from aminator.plugins.provisioner.yum import YumProvisionerPlugin, yum_localinstall
 from aminator.util import download_file
-from aminator.util.linux import command, mkdirs, apt_get_update, apt_get_install
+from aminator.util.linux import command, mkdirs, apt_get_update, apt_get_install, yum_install, yum_clean_metadata
 from aminator.util.linux import Chroot
 from aminator.config import conf_action
 
-__all__ = ('AptPuppetProvisionerPlugin',)
+__all__ = ('PuppetProvisionerPlugin',)
 log = logging.getLogger(__name__)
 
 CommandResult = namedtuple('CommandResult', 'success result')
 CommandOutput = namedtuple('CommandOutput', 'std_out std_err')
 
 
-class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
+class PuppetProvisionerPlugin(BaseProvisionerPlugin):
     """
-    AptPuppetProvisionerPlugin takes the majority of its behavior from AptProvisionerPlugin
-    See AptProvisionerPlugin for details
+    PuppetProvisionerPlugin takes the majority of its behavior from BaseProvisionerPlugin
+    See BaseProvisionerPlugin for details
     """
-    _name = 'apt_puppet'
+    _name = 'puppet'
 
     def add_plugin_args(self):
         context = self._config.context
@@ -68,10 +69,10 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
         """
         context = self._config.context
 
-	context.package.attributes = {'name': context.package.arg, 'version': 'puppet', 'release': time.strftime("%Y%m%d%H%M") }
+    context.package.attributes = {'name': context.package.arg, 'version': 'puppet', 'release': time.strftime("%Y%m%d%H%M") }
 
     def _makedirs(self, dirs):
-	log.debug('creating directory {0} if it does not exist'.format(dirs))    
+        log.debug('creating directory {0} if it does not exist'.format(dirs))
         if not os.path.exists(dirs):
             os.makedirs(dirs)
 
@@ -81,22 +82,37 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
         self._makedirs(self._mountpoint + private_keys_dir)
 
     def copy_puppet_certs(self, pem_file_name, certs_dir = '/var/lib/puppet/ssl/certs', private_keys_dir = '/var/lib/puppet/ssl/private_keys'):
-	# TODO make this configurable     
-	log.debug('Placing certs for {0} into mountpoint {1}'.format(pem_file_name, self._mountpoint))
-	shutil.copy(certs_dir        + '/ca.pem',           self._mountpoint + certs_dir)
-	shutil.copy(certs_dir        + '/' + pem_file_name + '.pem', self._mountpoint + certs_dir)
-	shutil.copy(private_keys_dir + '/' + pem_file_name + '.pem', self._mountpoint + private_keys_dir)
+        # TODO make this configurable
+        log.debug('Placing certs for {0} into mountpoint {1}'.format(pem_file_name, self._mountpoint))
+        shutil.copy(certs_dir        + '/ca.pem',           self._mountpoint + certs_dir)
+        shutil.copy(certs_dir        + '/' + pem_file_name + '.pem', self._mountpoint + certs_dir)
+        shutil.copy(private_keys_dir + '/' + pem_file_name + '.pem', self._mountpoint + private_keys_dir)
 
     def rm_puppet_certs_dirs(self, certs_dir = '/var/lib/puppet/ssl'):
         shutil.rmtree(certs_dir)
 
+    def untar_manifests(self, tarball):
+        import tarfile
+        import shutil
+
+        if tarfile.is_tarfile(tarball):
+            tar = tarfile.open(tarball)
+
+            dest_dir = os.path.join('etc','puppet') if 'modules' in tar.getnames() else os.path.join('etc','puppet','modules')
+
+            os.chdir(dest_dir)
+            tar.extractall
+            tar.close
+        else:
+            shutil.copy2(tarball, os.path.join('etc','puppet','modules', os.path.basename(tarball)))
+
     def provision(self):
         """
         overrides the base provision
-	  * generate certificates
-	  * install the certificates on the target volume
+      * generate certificates
+      * install the certificates on the target volume
           * install puppet on the target volume
-	  * run the puppet agent in the target chroot environment
+      * run the puppet agent in the target chroot environment
         """
 
         log.debug('Entering chroot at {0}'.format(self._mountpoint))
@@ -105,22 +121,34 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
         config = self._config
 
         # TODO
-	# generate the certificate or check that the specified file exists
-	generate_certificate(context.package.arg)
+        # generate the certificate or check that the specified file exists
+        if context.puppet.get('puppet_master_hostname', socket.gethostname()) is not None:
+            generate_certificate(context.package.arg)
 
-        self.make_puppet_certs_dir()
-	self.copy_puppet_certs(context.package.arg)
+            self.make_puppet_certs_dir()
+            self.copy_puppet_certs(context.package.arg)
 
         with Chroot(self._mountpoint):
             log.debug('Inside chroot')
 
-            apt_get_update
             log.info('Installing puppet agent')
-            apt_get_install("puppet")
-            
-            log.info('Running puppet agent')
-            result = puppet(context.package.arg, context.puppet.get('puppet_master_hostname', socket.gethostname()))
-            self.rm_puppet_certs_dirs()
+
+            if os.isfile('/usr/bin/yum'):
+                yum_clean_metadata
+                yum_install("puppet")
+            else:
+                apt_get_update
+                apt_get_install("puppet")
+
+            if context.puppet.get('puppet_master_hostname', socket.gethostname()) is not None:
+                log.info('Running puppet agent')
+                result = puppet_agent(context.package.arg, context.puppet.get('puppet_master_hostname', socket.gethostname()))
+            else:
+                log.info('Running puppet apply')
+                result = puppet_apply(context.package.arg, context.puppet.get('puppet_apply_args', '-d'))
+
+            if context.puppet.get('puppet_master_hostname', socket.gethostname()) is not None:
+                self.rm_puppet_certs_dirs()
 
             # * --detailed-exitcodes:
             #   Provide transaction information via exit codes. If this is enabled, an exit
@@ -132,7 +160,7 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
                 log.critical('puppet agent run failed: {0.std_err}'.format(result.result))
                 return False
 
-            
+
             self._store_package_metadata()
 
         self.make_puppet_certs_dir()
@@ -144,8 +172,12 @@ class AptPuppetProvisionerPlugin(AptProvisionerPlugin):
 
 
 @command()
-def puppet(certname, puppet_master_hostname):
+def puppet_agent(certname, puppet_master_hostname):
     return 'puppet agent --detailed-exitcodes --color=false --no-daemonize --logdest console --onetime --certname {0} --server {1}'.format(certname, puppet_master_hostname)
+
+@command()
+def puppet_apply(manifests_tarball, puppet_apply_args):
+    return 'puppet apply --detailed-exitcodes --color=false --logdest console --verbose {0}'.format(puppet_apply_args)
 
 @command()
 def generate_certificate(certname):
