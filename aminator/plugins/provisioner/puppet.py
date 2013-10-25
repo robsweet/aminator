@@ -30,10 +30,11 @@ import logging
 from collections import namedtuple
 import json
 
-from aminator.plugins.provisioner.apt import AptProvisionerPlugin, dpkg_install
-from aminator.plugins.provisioner.yum import YumProvisionerPlugin, yum_localinstall
+from aminator.plugins.provisioner.base import BaseProvisionerPlugin
+from aminator.plugins.provisioner.apt import AptProvisionerPlugin, dpkg_install, apt_get_update, apt_get_install
+from aminator.plugins.provisioner.yum import YumProvisionerPlugin, yum_localinstall, yum_install, yum_clean_metadata
 from aminator.util import download_file
-from aminator.util.linux import command, mkdirs, apt_get_update, apt_get_install, yum_install, yum_clean_metadata
+from aminator.util.linux import command, mkdirs
 from aminator.util.linux import Chroot
 from aminator.config import conf_action
 
@@ -69,7 +70,7 @@ class PuppetProvisionerPlugin(BaseProvisionerPlugin):
         """
         context = self._config.context
 
-    context.package.attributes = {'name': context.package.arg, 'version': 'puppet', 'release': time.strftime("%Y%m%d%H%M") }
+        context.package.attributes = {'name': context.package.arg, 'version': 'puppet', 'release': time.strftime("%Y%m%d%H%M") }
 
     def _makedirs(self, dirs):
         log.debug('creating directory {0} if it does not exist'.format(dirs))
@@ -106,7 +107,7 @@ class PuppetProvisionerPlugin(BaseProvisionerPlugin):
         else:
             shutil.copy2(tarball, os.path.join('etc','puppet','modules', os.path.basename(tarball)))
 
-    def provision(self):
+    def _provision_package(self):
         """
         overrides the base provision
       * generate certificates
