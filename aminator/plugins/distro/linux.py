@@ -168,8 +168,8 @@ class BaseLinuxDistroPlugin(BaseDistroPlugin):
         return self
 
     def __exit__(self, exc_type, exc_value, trace):
-        if exc_type: log.exception("Exception: {0}: {1}".format(exc_type.__name__,exc_value))
-        if exc_type and self._config.context.get("preserve_on_error", False):
+        log.debug("exc_type = {0} and preserve_on_error = {1}".format(exc_type, self._config.context.get('preserve_on_error', False)))
+        if exc_type and self._config.context.get('preserve_on_error', False):
             return False
         if not self._teardown_chroot():
             raise VolumeException('Error tearing down chroot')

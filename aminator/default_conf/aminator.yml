@@ -53,3 +53,5 @@ context:
     tags: {}
   web_log: {}
   cloud: {}
+  chef: {}
+  puppet: {}
