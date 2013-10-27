@@ -62,16 +62,35 @@ class PuppetProvisionerPlugin(BaseProvisionerPlugin):
                                     help='The puppet master hostname')
 
 
+        puppet_config.add_argument('-A', '--puppet_apply_args', dest='puppet_apply_args',
+                                    action=conf_action(config=context.puppet),
+                                    help='Extra arguments for Puppet Apply.  Can be used to include a Puppet class with -e.')
+
+        puppet_config.add_argument('-M', '--puppet_manifests', dest='puppet_manifests',
+                                    action=conf_action(config=context.puppet),
+                                    help='Puppet manifests to apply.  This can be a tarball or a single pp file.')
+
     def _store_package_metadata(self):
-        """
-        save info for the AMI we're building in the context so that it can be incorporated into tags and the description
-        during finalization. these values come from the chef JSON node file since we can't query the package for these
-        attributes
-        """
+        ""
+        
+    def _provision_package(self):
+        ""
+        
+    def _pre_chroot_block(self):
+        log.debug('Starting _pre_chroot_block')
         context = self._config.context
+        config = self._config
+        
+        log.debug("Setting metadata release to {0}".format(time.strftime("%Y%m%d%H%M")))
+        context.package.attributes = {'name': '', 'version': 'puppet', 'release': time.strftime("%Y%m%d%H%M") }
 
-        context.package.attributes = {'name': context.package.arg, 'version': 'puppet', 'release': time.strftime("%Y%m%d%H%M") }
-
+        if self._puppet_run_mode is 'master':
+            generate_certificate(context.package.arg)
+            self.make_puppet_certs_dir()
+            self.copy_puppet_certs(context.package.arg)
+        elif self._puppet_run_mode is 'apply':
+            self.copy_puppet_manifests(context.puppet.get('puppet_manifests'))
+                                                                            
     def _makedirs(self, dirs):
         log.debug('creating directory {0} if it does not exist'.format(dirs))
         if not os.path.exists(dirs):
@@ -79,35 +98,53 @@ class PuppetProvisionerPlugin(BaseProvisionerPlugin):
 
 
     def make_puppet_certs_dir(self, certs_dir = '/var/lib/puppet/ssl/certs', private_keys_dir = '/var/lib/puppet/ssl/private_keys'):
-        self._makedirs(self._mountpoint + certs_dir)
-        self._makedirs(self._mountpoint + private_keys_dir)
+        self._makedirs(self._distro._mountpoint + certs_dir)
+        self._makedirs(self._distro._mountpoint + private_keys_dir)
 
     def copy_puppet_certs(self, pem_file_name, certs_dir = '/var/lib/puppet/ssl/certs', private_keys_dir = '/var/lib/puppet/ssl/private_keys'):
         # TODO make this configurable
-        log.debug('Placing certs for {0} into mountpoint {1}'.format(pem_file_name, self._mountpoint))
-        shutil.copy(certs_dir        + '/ca.pem',           self._mountpoint + certs_dir)
-        shutil.copy(certs_dir        + '/' + pem_file_name + '.pem', self._mountpoint + certs_dir)
-        shutil.copy(private_keys_dir + '/' + pem_file_name + '.pem', self._mountpoint + private_keys_dir)
+        log.debug('Placing certs for {0} into mountpoint {1}'.format(pem_file_name, self._distro._mountpoint))
+        shutil.copy(certs_dir        + '/ca.pem',           self._distro._mountpoint + certs_dir)
+        shutil.copy(certs_dir        + '/' + pem_file_name + '.pem', self._distro._mountpoint + certs_dir)
+        shutil.copy(private_keys_dir + '/' + pem_file_name + '.pem', self._distro._mountpoint + private_keys_dir)
 
     def rm_puppet_certs_dirs(self, certs_dir = '/var/lib/puppet/ssl'):
         shutil.rmtree(certs_dir)
 
-    def untar_manifests(self, tarball):
+    def copy_puppet_manifests(self, manifests):
         import tarfile
         import shutil
 
-        if tarfile.is_tarfile(tarball):
-            tar = tarfile.open(tarball)
+        if tarfile.is_tarfile(manifests):
+            self._puppet_apply_file = ''
+            tar = tarfile.open(manifests)
 
-            dest_dir = os.path.join('etc','puppet') if 'modules' in tar.getnames() else os.path.join('etc','puppet','modules')
+            dest_dir = os.path.join(self._distro._mountpoint,'etc','puppet') if 'modules' in tar.getnames() else os.path.join(self._distro._mountpoint,'etc','puppet','modules')
 
+            self._makedirs(dest_dir)
+            log.debug('Untarring to {0}'.format(dest_dir))
             os.chdir(dest_dir)
             tar.extractall
             tar.close
         else:
-            shutil.copy2(tarball, os.path.join('etc','puppet','modules', os.path.basename(tarball)))
+            self._puppet_apply_file = os.path.join('etc','puppet','modules', os.path.basename(manifests))
+            dest_file = os.path.join(self._distro._mountpoint,'etc','puppet','modules', os.path.basename(manifests))
+            self._makedirs(os.path.join(self._distro._mountpoint,'etc','puppet','modules'))
+            log.debug('Trying to copy \'{0}\' to \'{1}\''.format(manifests, dest_file))
+            shutil.copy2(manifests, dest_file)
 
-    def _provision_package(self):
+    def provision(self):
+        log.debug('Starting provision')
+        if self._config.context.puppet.get('puppet_master_hostname') is not None:
+           self._puppet_run_mode = 'master'
+        elif self._config.context.puppet.get('puppet_manifests') is not None:
+           self._puppet_run_mode = 'apply'
+        else:
+           log.exception('Must pass either puppet_master_hostname or puppet_manifests')
+           return False
+        
+        log.debug('Puppet run mode = {0}'.format(self._puppet_run_mode))
+
         """
         overrides the base provision
       * generate certificates
@@ -116,55 +153,47 @@ class PuppetProvisionerPlugin(BaseProvisionerPlugin):
       * run the puppet agent in the target chroot environment
         """
 
-        log.debug('Entering chroot at {0}'.format(self._mountpoint))
-
         context = self._config.context
         config = self._config
 
-        # TODO
-        # generate the certificate or check that the specified file exists
-        if context.puppet.get('puppet_master_hostname', socket.gethostname()) is not None:
-            generate_certificate(context.package.arg)
+        self._pre_chroot_block()
+        
+        log.debug('Entering chroot at {0}'.format(self._distro._mountpoint))
 
-            self.make_puppet_certs_dir()
-            self.copy_puppet_certs(context.package.arg)
+        with Chroot(self._distro._mountpoint):
+            log.debug('Inside Puppet chroot')
 
-        with Chroot(self._mountpoint):
-            log.debug('Inside chroot')
 
-            log.info('Installing puppet agent')
-
-            if os.isfile('/usr/bin/yum'):
+            if self._distro._name is 'redhat':
+                log.info('Installing Puppet with yum.')
                 yum_clean_metadata
-                yum_install("puppet")
+                yum_install('puppet')
             else:
+                log.info('Installing Puppet with apt.')
                 apt_get_update
-                apt_get_install("puppet")
+                apt_get_install('puppet')
 
-            if context.puppet.get('puppet_master_hostname', socket.gethostname()) is not None:
+            if self._puppet_run_mode is 'master':
                 log.info('Running puppet agent')
                 result = puppet_agent(context.package.arg, context.puppet.get('puppet_master_hostname', socket.gethostname()))
-            else:
-                log.info('Running puppet apply')
-                result = puppet_apply(context.package.arg, context.puppet.get('puppet_apply_args', '-d'))
-
-            if context.puppet.get('puppet_master_hostname', socket.gethostname()) is not None:
                 self.rm_puppet_certs_dirs()
+            elif self._puppet_run_mode is 'apply':
+                if self._puppet_apply_file is '':
+                    log.info('Running puppet apply')
+                else:
+                    log.info('Running puppet apply for {0}'.format(self._puppet_apply_file))
+                result = puppet_apply( context.puppet.get('puppet_apply_args', '--debug'), self._puppet_apply_file )
 
             # * --detailed-exitcodes:
             #   Provide transaction information via exit codes. If this is enabled, an exit
             #   code of '2' means there were changes, an exit code of '4' means there were
             #   failures during the transaction, and an exit code of '6' means there were both
             #   changes and failures.
-            log.info('puppet status code {0} with result {1}'.format(result.result.status_code, result.result))
+            log.info('Puppet status code {0} with result {1}'.format(result.result.status_code, result.result))
             if not (result.result.status_code in [0,2]):
-                log.critical('puppet agent run failed: {0.std_err}'.format(result.result))
+                log.critical('Puppet run failed: {0.std_err}'.format(result.result))
                 return False
 
-
-            self._store_package_metadata()
-
-        self.make_puppet_certs_dir()
         log.debug('Exited chroot')
 
         log.info('Provisioning succeeded!')
@@ -174,11 +203,11 @@ class PuppetProvisionerPlugin(BaseProvisionerPlugin):
 
 @command()
 def puppet_agent(certname, puppet_master_hostname):
-    return 'puppet agent --detailed-exitcodes --color=false --no-daemonize --logdest console --onetime --certname {0} --server {1}'.format(certname, puppet_master_hostname)
+    return 'puppet agent --detailed-exitcodes --no-daemonize --logdest console --onetime --certname {0} --server {1}'.format(certname, puppet_master_hostname)
 
 @command()
-def puppet_apply(manifests_tarball, puppet_apply_args):
-    return 'puppet apply --detailed-exitcodes --color=false --logdest console --verbose {0}'.format(puppet_apply_args)
+def puppet_apply( puppet_apply_args, puppet_apply_file ):
+    return 'puppet apply --detailed-exitcodes --logdest console --verbose {0} {1}'.format(puppet_apply_args, puppet_apply_file)
 
 @command()
 def generate_certificate(certname):

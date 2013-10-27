@@ -16,12 +16,14 @@ ec2_apt_linux:
 ec2_apt_chef_linux:
     cloud: ec2
     provisioner: apt_chef
+    distro: debian
     volume: linux
     blockdevice: linux
     finalizer: tagging_ebs
 ec2_puppet_linux:
     cloud: ec2
     provisioner: apt_puppet
+    distro: redhat
     volume: linux
     blockdevice: linux
     finalizer: tagging_ebs
